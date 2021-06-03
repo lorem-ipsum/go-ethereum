@@ -219,6 +219,10 @@ const (
 // conn wraps a network connection with information gathered
 // during the two handshakes.
 type conn struct {
+	// @notes conn包含从两次握手中获得的所有信息
+	// fd是一个最底层的网络连接（使用了golang的net库）
+	// transport包含底层的握手以及读写等功能
+	// flags压位存储连接相关的bool变量，例如是否为inboundConn或trustedConn
 	fd net.Conn
 	transport
 	node  *enode.Node
@@ -228,6 +232,7 @@ type conn struct {
 	name  string     // valid after the protocol handshake
 }
 
+// @notes transport结构包含三个方法（密码学握手、协议握手和关闭）以及一个MsgReadWriter
 type transport interface {
 	// The two handshakes.
 	doEncHandshake(prv *ecdsa.PrivateKey) (*ecdsa.PublicKey, error)
@@ -271,6 +276,7 @@ func (f connFlag) String() string {
 	return s
 }
 
+// @notes 压位存储各种flag（例如是否是inbound连接）
 func (c *conn) is(f connFlag) bool {
 	flags := connFlag(atomic.LoadInt32((*int32)(&c.flags)))
 	return flags&f != 0
@@ -434,6 +440,7 @@ func (s *sharedUDPConn) Close() error {
 // Start starts running the server.
 // Servers can not be re-used after stopping.
 func (srv *Server) Start() (err error) {
+	// @notes 完成error handling并初始化各个chanel，最后调用Server.run()
 	srv.lock.Lock()
 	defer srv.lock.Unlock()
 	if srv.running {
@@ -739,6 +746,7 @@ running:
 			op(peers)
 			srv.peerOpDone <- struct{}{}
 
+		// @notes 与一个节点完成握手
 		case c := <-srv.checkpointPostHandshake:
 			// A connection has passed the encryption handshake so
 			// the remote identity is known (but hasn't been verified yet).
@@ -749,6 +757,7 @@ running:
 			// TODO: track in-progress inbound node IDs (pre-Peer) to avoid dialing them.
 			c.cont <- srv.postHandshakeChecks(peers, inboundCount, c)
 
+		// @notes 正式将节点添加到peers列表中
 		case c := <-srv.checkpointAddPeer:
 			// At this point the connection is past the protocol handshake.
 			// Its capabilities are known and the remote identity is verified.

@@ -68,6 +68,7 @@ const (
 
 // New creates a new P2P node, ready for protocol registration.
 func New(conf *Config) (*Node, error) {
+	// @notes 从conf构造一个Node
 	// Copy config and resolve the datadir so future changes to the current
 	// working directory don't affect the node.
 	confCopy := *conf

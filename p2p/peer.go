@@ -104,6 +104,7 @@ type PeerEvent struct {
 
 // Peer represents a connected remote node.
 type Peer struct {
+	// @notes conn中包含两次握手所得信息（偏向底层）
 	rw      *conn
 	running map[string]*protoRW
 	log     log.Logger
