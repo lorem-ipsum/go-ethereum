@@ -154,6 +154,7 @@ func New(conf *Config) (*Node, error) {
 // Start starts all registered lifecycles, RPC services and p2p networking.
 // Node can only be started once.
 func (n *Node) Start() error {
+	// @notes 打开endpoints，并运行所有注册的lifecycle。
 	n.startStopLock.Lock()
 	defer n.startStopLock.Unlock()
 
@@ -168,6 +169,7 @@ func (n *Node) Start() error {
 	}
 	n.state = runningState
 	// open networking and RPC endpoints
+	// @notes n.openEndPoints包含n.server.Start()和n.openRPC()
 	err := n.openEndpoints()
 	lifecycles := make([]Lifecycle, len(n.lifecycles))
 	copy(lifecycles, n.lifecycles)

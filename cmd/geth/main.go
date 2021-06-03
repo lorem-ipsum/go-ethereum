@@ -53,6 +53,14 @@ var (
 	// The app that holds all commands and flags.
 	app = flags.NewApp(gitCommit, gitDate, "the go-ethereum command line interface")
 	// flags that configure the node
+
+	// @notes cli.Flag类型样例如下
+	// cli.StringFlag{
+	// 	Name:        "lang, l",
+	// 	Value:       "english",
+	// 	Usage:       "read from `FILE`",
+	// 	Destination: &language,
+	// }
 	nodeFlags = []cli.Flag{
 		utils.IdentityFlag,
 		utils.UnlockedAccountFlag,
@@ -201,9 +209,25 @@ var (
 
 func init() {
 	// Initialize the CLI app and start Geth
+	// @notes 关于App类的使用，参见[Go语言命令行库urfave/cli简介](https://blog.csdn.net/zl1zl2zl3/article/details/83269694)
 	app.Action = geth
 	app.HideVersion = true // we have a command to print the version
 	app.Copyright = "Copyright 2013-2021 The go-ethereum Authors"
+
+	// @notes app.Commands shoud be a slice of cli.Command
+	// app.Commands = []cli.Command{
+	// 	{
+	// 		Name:     "add",
+	// 		Aliases:  []string{"a"},
+	// 		Usage:    "calc 1+1",
+	// 		Category: "arithmetic",
+	// 		Action: func(c *cli.Context) error {
+	// 			fmt.Println("1 + 1 = ", 1+1)
+	// 			return nil
+	// 		},
+	// 	},
+	// }
+
 	app.Commands = []cli.Command{
 		// See chaincmd.go:
 		initCommand,
@@ -309,6 +333,7 @@ func prepare(ctx *cli.Context) {
 // geth is the main entry point into the system if no special subcommand is ran.
 // It creates a default node based on the command line arguments and runs it in
 // blocking mode, waiting for it to be shut down.
+// @notes 当未指定subcommand时，geth函数被执行。
 func geth(ctx *cli.Context) error {
 	if args := ctx.Args(); len(args) > 0 {
 		return fmt.Errorf("invalid command: %q", args[0])

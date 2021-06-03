@@ -67,6 +67,7 @@ func Fatalf(format string, args ...interface{}) {
 }
 
 func StartNode(ctx *cli.Context, stack *node.Node) {
+	// @notes 核心语句为stack.Start()，其余为interrupt handling。
 	if err := stack.Start(); err != nil {
 		Fatalf("Error starting protocol stack: %v", err)
 	}
