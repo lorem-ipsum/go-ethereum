@@ -177,6 +177,7 @@ func newDialScheduler(config dialConfig, it enode.Iterator, setupFunc dialSetupF
 	d.lastStatsLog = d.clock.Now()
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.wg.Add(2)
+	// @notes readNodes函数将it中的所有node逐个注入d.nodesIn channel
 	go d.readNodes(it)
 	go d.loop(it)
 	return d
@@ -232,6 +233,9 @@ loop:
 		// Launch new dials if slots are available.
 		slots := d.freeDialSlots()
 		slots -= d.startStaticDials(slots)
+		// @notes 假如还有空余的slots，则用nodesCh来接受newDialScheduler提供的nodes
+		// If the slot is available, the dial-up connection will be started.
+		// The slot is equivalent to space, and the number of dial-up connections is limited
 		if slots > 0 {
 			nodesCh = d.nodesIn
 		} else {
@@ -241,19 +245,23 @@ loop:
 		d.logStats()
 
 		select {
+		// @notes 主逻辑 After receiving the message from readnode, 进行对一个node的连接
 		case node := <-nodesCh:
+			// @notes checkDial检查node的网络参数是否异常、是否正在连接、是否在白名单中等等
 			if err := d.checkDial(node); err != nil {
 				d.log.Trace("Discarding dial candidate", "id", node.ID(), "ip", node.IP(), "reason", err)
 			} else {
 				d.startDial(newDialTask(node, dynDialedConn))
 			}
 
+		// @notes Dailing task completed
 		case task := <-d.doneCh:
 			id := task.dest.ID()
 			delete(d.dialing, id)
 			d.updateStaticPool(id)
 			d.doneSinceLastLog++
 
+		// @notes The next step is to trigger other operations
 		case c := <-d.addPeerCh:
 			if c.is(dynDialedConn) || c.is(staticDialedConn) {
 				d.dialPeers++
@@ -455,6 +463,7 @@ func (d *dialScheduler) startDial(task *dialTask) {
 	hkey := string(task.dest.ID().Bytes())
 	d.history.add(hkey, d.clock.Now().Add(dialHistoryExpiration))
 	d.dialing[task.dest.ID()] = task
+	// @notes 主逻辑 运行dialTask.run()，完成后通知dialScheduler
 	go func() {
 		task.run(d)
 		d.doneCh <- task
@@ -535,12 +544,15 @@ func (t *dialTask) resolve(d *dialScheduler) bool {
 
 // dial performs the actual connection attempt.
 func (t *dialTask) dial(d *dialScheduler, dest *enode.Node) error {
+	// @notes fd负责底层连接
 	fd, err := d.dialer.Dial(d.ctx, t.dest)
 	if err != nil {
 		d.log.Trace("Dial error", "id", t.dest.ID(), "addr", nodeAddr(t.dest), "conn", t.flags, "err", cleanupDialErr(err))
 		return &dialError{err}
 	}
 	mfd := newMeteredConn(fd, false, &net.TCPAddr{IP: dest.IP(), Port: dest.TCP()})
+	// @notes Active dialing, with destination address, calls the function of setupConn
+	// represented by setupFunc, and establishes a connection through the function of setupConn
 	return d.setupFunc(mfd, t.flags, dest)
 }
 

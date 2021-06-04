@@ -235,6 +235,7 @@ type conn struct {
 // @notes transport结构包含三个方法（密码学握手、协议握手和关闭）以及一个MsgReadWriter
 type transport interface {
 	// The two handshakes.
+	// @notes 密码学握手需要自己的公钥，最后获得对方的公钥
 	doEncHandshake(prv *ecdsa.PrivateKey) (*ecdsa.PublicKey, error)
 	doProtoHandshake(our *protoHandshake) (*protoHandshake, error)
 	// The MsgReadWriter can only be used after the encryption
@@ -477,20 +478,24 @@ func (srv *Server) Start() (err error) {
 	srv.peerOp = make(chan peerOpFunc)
 	srv.peerOpDone = make(chan struct{})
 
+	// @notes 进行srv.localnode的初始化（包括获得本节点IP），并建立数据库
 	if err := srv.setupLocalNode(); err != nil {
 		return err
 	}
+	// @notes 开始passive connection
 	if srv.ListenAddr != "" {
 		if err := srv.setupListening(); err != nil {
 			return err
 		}
 	}
+	// @notes 开始active connecting
 	if err := srv.setupDiscovery(); err != nil {
 		return err
 	}
 	srv.setupDialScheduler()
 
 	srv.loopWG.Add(1)
+	// @notes 进入server main loop
 	go srv.run()
 	return nil
 }
@@ -597,6 +602,7 @@ func (srv *Server) setupDiscovery() error {
 			return err
 		}
 		srv.ntab = ntab
+		// @notes Randomly select a target node for findnodes return
 		srv.discmix.AddSource(ntab.RandomNodes())
 	}
 
@@ -622,6 +628,7 @@ func (srv *Server) setupDiscovery() error {
 }
 
 func (srv *Server) setupDialScheduler() {
+	// @notes First of all, param setting
 	config := dialConfig{
 		self:           srv.localnode.ID(),
 		maxDialPeers:   srv.maxDialedConns(),
@@ -637,6 +644,9 @@ func (srv *Server) setupDialScheduler() {
 	if config.dialer == nil {
 		config.dialer = tcpDialer{&net.Dialer{Timeout: defaultDialTimeout}}
 	}
+	// @notes link building function
+	// discmix determines the node set for active connection establishment, which is an iterator.
+	// At the same time, it passes the function of setupconn into discmix.
 	srv.dialsched = newDialScheduler(config, srv.discmix, srv.SetupConn)
 	for _, n := range srv.StaticNodes {
 		srv.dialsched.addStatic(n)
@@ -786,6 +796,7 @@ running:
 		}
 	}
 
+	// @notes 以下代码均为server停止以后所做的cleanup work
 	srv.log.Trace("P2P networking is spinning down")
 
 	// Terminate discovery. If there is a running lookup it will terminate soon.
@@ -844,6 +855,7 @@ func (srv *Server) listenLoop() {
 	if srv.MaxPendingPeers > 0 {
 		tokens = srv.MaxPendingPeers
 	}
+	// @notes slots中有货表示愿意接受连接请求
 	slots := make(chan struct{}, tokens)
 	for i := 0; i < tokens; i++ {
 		slots <- struct{}{}
@@ -885,6 +897,7 @@ func (srv *Server) listenLoop() {
 		}
 
 		remoteIP := netutil.AddrIP(fd.RemoteAddr())
+		// @notes checkInbounConn检查对方node是否在白名单中、是否频繁发起请求等等
 		if err := srv.checkInboundConn(remoteIP); err != nil {
 			srv.log.Debug("Rejected inbound connection", "addr", fd.RemoteAddr(), "err", err)
 			fd.Close()
@@ -900,7 +913,9 @@ func (srv *Server) listenLoop() {
 			srv.log.Trace("Accepted connection", "addr", fd.RemoteAddr())
 		}
 		go func() {
+			// @notes SetupConn试图将一个连接变成一个Peer
 			srv.SetupConn(fd, inboundConn, nil)
+			// @notes 连接成功后释放slots
 			slots <- struct{}{}
 		}()
 	}
@@ -962,7 +977,11 @@ func (srv *Server) setupConn(c *conn, flags connFlag, dialDest *enode.Node) erro
 		}
 	}
 
+	// @notes 以下代码中进行了两次握手（doEncHandshake & doProtoHandshake）
+
 	// Run the RLPx handshake.
+	// @notes Public key exchange is carried out, and the handshake
+	// at the RLPx level of the shared secret key is determined.
 	remotePubkey, err := c.doEncHandshake(srv.PrivateKey)
 	if err != nil {
 		srv.log.Trace("Failed RLPx handshake", "addr", c.fd.RemoteAddr(), "conn", c.flags, "err", err)
@@ -981,6 +1000,7 @@ func (srv *Server) setupConn(c *conn, flags connFlag, dialDest *enode.Node) erro
 	}
 
 	// Run the capability negotiation handshake.
+	// @notes Handshake at the protocol level (p2p handshake)
 	phs, err := c.doProtoHandshake(srv.ourHandshake)
 	if err != nil {
 		clog.Trace("Failed p2p handshake", "err", err)
