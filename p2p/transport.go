@@ -73,6 +73,7 @@ func (t *rlpxTransport) ReadMsg() (Msg, error) {
 	return msg, err
 }
 
+// @notes Send函数会调用本函数，参数为经过RLP编码的msg
 func (t *rlpxTransport) WriteMsg(msg Msg) error {
 	t.wmu.Lock()
 	defer t.wmu.Unlock()
@@ -132,7 +133,9 @@ func (t *rlpxTransport) doProtoHandshake(our *protoHandshake) (their *protoHands
 	// disconnects us early with a valid reason, we should return it
 	// as the error so it can be tracked elsewhere.
 	werr := make(chan error, 1)
+	// @notes 将handshakeMsg编码后写入t的MsgWriter中
 	go func() { werr <- Send(t, handshakeMsg, our) }()
+	// @notes 将对方发送的handshakeMsg解码后写入their中
 	if their, err = readProtocolHandshake(t); err != nil {
 		<-werr // make sure the write terminates too
 		return nil, err
@@ -146,6 +149,7 @@ func (t *rlpxTransport) doProtoHandshake(our *protoHandshake) (their *protoHands
 	return their, nil
 }
 
+// @notes 将读到的msg从RLP格式解码并返回
 func readProtocolHandshake(rw MsgReader) (*protoHandshake, error) {
 	msg, err := rw.ReadMsg()
 	if err != nil {

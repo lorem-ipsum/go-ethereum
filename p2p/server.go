@@ -756,7 +756,7 @@ running:
 			op(peers)
 			srv.peerOpDone <- struct{}{}
 
-		// @notes 与一个节点完成握手
+		// @notes 与一个节点完成密码学握手
 		case c := <-srv.checkpointPostHandshake:
 			// A connection has passed the encryption handshake so
 			// the remote identity is known (but hasn't been verified yet).
@@ -765,15 +765,17 @@ running:
 				c.flags |= trustedConn
 			}
 			// TODO: track in-progress inbound node IDs (pre-Peer) to avoid dialing them.
+			// @notes 作简单的检查，例如连接数量是否超限、是否已经是peer、是否是自己等
 			c.cont <- srv.postHandshakeChecks(peers, inboundCount, c)
 
-		// @notes 正式将节点添加到peers列表中
+		// @notes 与一个节点完成协议握手
 		case c := <-srv.checkpointAddPeer:
 			// At this point the connection is past the protocol handshake.
 			// Its capabilities are known and the remote identity is verified.
 			err := srv.addPeerChecks(peers, inboundCount, c)
 			if err == nil {
 				// The handshakes are done and it passed all checks.
+				// @notes 自此握手结束，并通过了所有检查。现在终于可以将节点加入peers中了。
 				p := srv.launchPeer(c)
 				peers[c.node.ID()] = p
 				srv.log.Debug("Adding p2p peer", "peercount", len(peers), "id", p.ID(), "conn", c.flags, "addr", p.RemoteAddr(), "name", p.Name())
@@ -913,7 +915,7 @@ func (srv *Server) listenLoop() {
 			srv.log.Trace("Accepted connection", "addr", fd.RemoteAddr())
 		}
 		go func() {
-			// @notes SetupConn试图将一个连接变成一个Peer
+			// @notes SetupConn试图将一个Node变成一个Peer，成功或失败后才会返回。
 			srv.SetupConn(fd, inboundConn, nil)
 			// @notes 连接成功后释放slots
 			slots <- struct{}{}
@@ -993,6 +995,7 @@ func (srv *Server) setupConn(c *conn, flags connFlag, dialDest *enode.Node) erro
 		c.node = nodeFromConn(remotePubkey, c.fd)
 	}
 	clog := srv.log.New("id", c.node.ID(), "addr", c.fd.RemoteAddr(), "conn", c.flags)
+	// @notes 通知srv已经通过密码学握手
 	err = srv.checkpoint(c, srv.checkpointPostHandshake)
 	if err != nil {
 		clog.Trace("Rejected peer", "err", err)
@@ -1011,6 +1014,7 @@ func (srv *Server) setupConn(c *conn, flags connFlag, dialDest *enode.Node) erro
 		return DiscUnexpectedIdentity
 	}
 	c.caps, c.name = phs.Caps, phs.Name
+	// @notes 通知srv已经通过协议握手
 	err = srv.checkpoint(c, srv.checkpointAddPeer)
 	if err != nil {
 		clog.Trace("Rejected peer", "err", err)
@@ -1032,6 +1036,7 @@ func nodeFromConn(pubkey *ecdsa.PublicKey, conn net.Conn) *enode.Node {
 
 // checkpoint sends the conn to run, which performs the
 // post-handshake checks for the stage (posthandshake, addpeer).
+// @notes checkpoint函数将第一个参数传入第二个参数（一个通道）中，并读取c.cont。
 func (srv *Server) checkpoint(c *conn, stage chan<- *conn) error {
 	select {
 	case stage <- c:

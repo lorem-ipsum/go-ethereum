@@ -52,6 +52,7 @@ type Msg struct {
 // the given value, which must be a pointer.
 //
 // For the decoding rules, please see package rlp.
+// @notes Decode函数将RLP编码的msg解码到val中
 func (msg Msg) Decode(val interface{}) error {
 	s := rlp.NewStream(msg.Payload, uint64(msg.Size))
 	if err := s.Decode(val); err != nil {
@@ -97,6 +98,7 @@ type MsgReadWriter interface {
 
 // Send writes an RLP-encoded message with the given code.
 // data should encode as an RLP list.
+// @notes Send函数将data编码为RLP并写入w中
 func Send(w MsgWriter, msgcode uint64, data interface{}) error {
 	size, r, err := rlp.EncodeToReader(data)
 	if err != nil {
