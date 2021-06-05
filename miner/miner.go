@@ -55,6 +55,7 @@ type Config struct {
 
 // Miner creates blocks and searches for proof-of-work values.
 type Miner struct {
+	// worker用于支持主要的挖矿流程，coinbase为矿工地址
 	mux      *event.TypeMux
 	worker   *worker
 	coinbase common.Address
@@ -84,6 +85,8 @@ func New(eth Backend, config *Config, chainConfig *params.ChainConfig, mux *even
 // It's entered once and as soon as `Done` or `Failed` has been broadcasted the events are unregistered and
 // the loop is exited. This to prevent a major security vuln where external parties can DOS you with blocks
 // and halt your mining operation for as long as the DOS continues.
+// @?notes miner.update()方法监听downloader事件，控制着canStart和shouldStart这两个开关，
+// 用于抵挡DOS攻击。
 func (miner *Miner) update() {
 	events := miner.mux.Subscribe(downloader.StartEvent{}, downloader.DoneEvent{}, downloader.FailedEvent{})
 	defer func() {
@@ -105,6 +108,7 @@ func (miner *Miner) update() {
 			}
 			switch ev.Data.(type) {
 			case downloader.StartEvent:
+				// downloader同步时不可进行挖矿
 				wasMining := miner.Mining()
 				miner.worker.stop()
 				canStart = false
@@ -129,6 +133,7 @@ func (miner *Miner) update() {
 				events.Unsubscribe()
 			}
 		case addr := <-miner.startCh:
+			// Miner.Start()函数将coinbase注入miner.startCh通道中，触发本case
 			miner.SetEtherbase(addr)
 			if canStart {
 				miner.worker.start()

@@ -133,6 +133,10 @@ type worker struct {
 	pendingLogsFeed event.Feed
 
 	// Subscriptions
+	// @notes
+	// txsCh接受交易池更新事件
+	// chainHeadCh接受区块头更新事件
+	// chainSideCh接受区块头分叉事件
 	mux          *event.TypeMux
 	txsCh        chan core.NewTxsEvent
 	txsSub       event.Subscription
@@ -212,8 +216,10 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
 	}
 	// Subscribe NewTxsEvent for tx pool
+	// @notes 订阅交易池事件
 	worker.txsSub = eth.TxPool().SubscribeNewTxsEvent(worker.txsCh)
 	// Subscribe events for blockchain
+	// @notes 订阅规范链更新事件和链分叉事件
 	worker.chainHeadSub = eth.BlockChain().SubscribeChainHeadEvent(worker.chainHeadCh)
 	worker.chainSideSub = eth.BlockChain().SubscribeChainSideEvent(worker.chainSideCh)
 
@@ -362,6 +368,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	clearPending := func(number uint64) {
 		w.pendingMu.Lock()
 		for h, t := range w.pendingTasks {
+			// @notes 假如该task已经落后正规链7个区块，则将其从pendingTasks中删除
 			if t.block.NumberU64()+staleThreshold <= number {
 				delete(w.pendingTasks, h)
 			}
@@ -374,14 +381,22 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		case <-w.startCh:
 			clearPending(w.chain.CurrentBlock().NumberU64())
 			timestamp = time.Now().Unix()
+			// @notes commit函数构造一个newWorkReq对象，传入newWorkCh，由mainLoop处理
 			commit(false, commitInterruptNewHead)
 
 		case head := <-w.chainHeadCh:
+			// @notes 接收到一个新区块，删除pendingTasks中过老的任务
 			clearPending(head.Block.NumberU64())
 			timestamp = time.Now().Unix()
+			// @notes commit函数构造一个newWorkReq对象，传入newWorkCh，由mainLoop处理
 			commit(false, commitInterruptNewHead)
 
 		case <-timer.C:
+			// @notes 每隔3秒检查新交易
+			// by default, it checks every three seconds for new
+			// transactions to be processed. If so, mining needs
+			// to be resumed. In order to package the elevated
+			// transactions into blocks first.
 			// If mining is running resubmit a new work cycle periodically to pull in
 			// higher priced transactions. Disable this overhead for pending blocks.
 			if w.isRunning() && (w.chainConfig.Clique == nil || w.chainConfig.Clique.Period > 0) {
@@ -437,11 +452,14 @@ func (w *worker) mainLoop() {
 
 	for {
 		select {
+		// @notes 接收到来自newWorkLoop的newWorkCh的信号，进一步递交挖矿task
 		case req := <-w.newWorkCh:
 			w.commitNewWork(req.interrupt, req.noempty, req.timestamp)
 
+		// @notes 出现分叉后，处理叔块
 		case ev := <-w.chainSideCh:
 			// Short circuit for duplicate side blocks
+			// @notes 检验该hash的区块是否已经被当做潜在叔块，如果是，则忽略
 			if _, exist := w.localUncles[ev.Block.Hash()]; exist {
 				continue
 			}
@@ -449,6 +467,7 @@ func (w *worker) mainLoop() {
 				continue
 			}
 			// Add side block to possible uncle block set depending on the author.
+			// @notes 将该区块作为潜在叔块加入叔块map，key为该区块的矿工地址
 			if w.isLocalBlock != nil && w.isLocalBlock(ev.Block) {
 				w.localUncles[ev.Block.Hash()] = ev.Block
 			} else {
@@ -456,6 +475,7 @@ func (w *worker) mainLoop() {
 			}
 			// If our mining block contains less than 2 uncle blocks,
 			// add the new uncle block if valid and regenerate a mining block.
+			// @notes 如果我们正在mining的区块少于两个uncles，则添加新的uncles并重新生成mining block
 			if w.isRunning() && w.current != nil && w.current.uncles.Cardinality() < 2 {
 				start := time.Now()
 				if err := w.commitUncle(w.current, ev.Block.Header()); err == nil {
@@ -479,6 +499,7 @@ func (w *worker) mainLoop() {
 				}
 			}
 
+		// @notes 交易池更新事件
 		case ev := <-w.txsCh:
 			// Apply transactions to the pending state if we're not mining.
 			//
@@ -532,6 +553,7 @@ func (w *worker) mainLoop() {
 
 // taskLoop is a standalone goroutine to fetch sealing task from the generator and
 // push them to consensus engine.
+// @notes taskLoop负责接收工作，并着手挖矿
 func (w *worker) taskLoop() {
 	var (
 		stopCh chan struct{}
@@ -557,9 +579,11 @@ func (w *worker) taskLoop() {
 				continue
 			}
 			// Interrupt previous sealing operation
+			// @notes 每次接收到新的挖矿任务时，自动停止正在进行的任务
 			interrupt()
 			stopCh, prev = make(chan struct{}), sealHash
 
+			// @notes skipSealHook仅用于测试
 			if w.skipSealHook != nil && w.skipSealHook(task) {
 				continue
 			}
@@ -567,6 +591,8 @@ func (w *worker) taskLoop() {
 			w.pendingTasks[sealHash] = task
 			w.pendingMu.Unlock()
 
+			// @notes Seal函数负责挖矿，挖出区块后w.resultCh会收到通知，后续在resultLoop中得到处理
+			// 当stopCh接收到信号时停止此次挖矿工作
 			if err := w.engine.Seal(w.chain, task.block, w.resultCh, stopCh); err != nil {
 				log.Warn("Block sealing failed", "err", err)
 			}
@@ -579,10 +605,12 @@ func (w *worker) taskLoop() {
 
 // resultLoop is a standalone goroutine to handle sealing result submitting
 // and flush relative data to the database.
+// @notes resultLoop负责挖出区块之后的工作
 func (w *worker) resultLoop() {
 	for {
 		select {
 		case block := <-w.resultCh:
+			// @notes 收到成功挖出区块的通知
 			// Short circuit when receiving empty result.
 			if block == nil {
 				continue
@@ -866,6 +894,7 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 }
 
 // commitNewWork generates several new sealing tasks based on the parent block.
+// @notes commitNetWork函数调用w.commit，最终构造了task，并通知taskLoop进行挖矿
 func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -989,10 +1018,14 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 
 // commit runs any post-transaction state modifications, assembles the final block
 // and commits new work if consensus engine is running.
+// @notes commit函数构造一个task，并通知taskLoop进行挖矿工作
 func (w *worker) commit(uncles []*types.Header, interval func(), update bool, start time.Time) error {
 	// Deep copy receipts here to avoid interaction between different tasks.
 	receipts := copyReceipts(w.current.receipts)
 	s := w.current.state.Copy()
+	// @notes FinalizeAndAssemble函数如其名，先计算各方奖励，修改区块头，再组装一整个区块
+	// FinalizeAndAssemble implements consensus.Engine, accumulating the block and
+	// uncle rewards, setting the final state and assembling the block.
 	block, err := w.engine.FinalizeAndAssemble(w.chain, w.current.header, s, w.current.txs, uncles, receipts)
 	if err != nil {
 		return err
@@ -1003,6 +1036,7 @@ func (w *worker) commit(uncles []*types.Header, interval func(), update bool, st
 		}
 		select {
 		case w.taskCh <- &task{receipts: receipts, state: s, block: block, createdAt: time.Now()}:
+			// @notes taskCh接收到task后，在taskLoop中触发挖矿工作
 			w.unconfirmed.Shift(block.NumberU64() - 1)
 			log.Info("Commit new mining work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
 				"uncles", len(uncles), "txs", w.current.tcount,

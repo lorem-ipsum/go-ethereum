@@ -48,6 +48,7 @@ var (
 
 // Seal implements consensus.Engine, attempting to find a nonce that satisfies
 // the block's difficulty requirements.
+// @notes 负责将挖矿任务分配给多个线程，将挖出的区块传给results
 func (ethash *Ethash) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
 	// If we're running a fake PoW, simply return a 0 nonce immediately
 	if ethash.config.PowMode == ModeFake || ethash.config.PowMode == ModeFullFake {
@@ -92,6 +93,7 @@ func (ethash *Ethash) Seal(chain consensus.ChainHeaderReader, block *types.Block
 		pend   sync.WaitGroup
 		locals = make(chan *types.Block)
 	)
+	// @notes 对每个thread分配任务（非阻塞），某个thread成功后会将挖出的区块传入locals通道中
 	for i := 0; i < threads; i++ {
 		pend.Add(1)
 		go func(id int, nonce uint64) {
@@ -107,12 +109,14 @@ func (ethash *Ethash) Seal(chain consensus.ChainHeaderReader, block *types.Block
 			// Outside abort, stop all miner threads
 			close(abort)
 		case result = <-locals:
+			// @notes locals通道接收到消息，说明有某个thread成功了
 			// One of the threads found a block, abort all others
 			select {
 			case results <- result:
 			default:
 				ethash.config.Log.Warn("Sealing result is not read by miner", "mode", "local", "sealhash", ethash.SealHash(block.Header()))
 			}
+			// @?
 			close(abort)
 		case <-ethash.update:
 			// Thread count was changed on user request, restart
@@ -129,6 +133,9 @@ func (ethash *Ethash) Seal(chain consensus.ChainHeaderReader, block *types.Block
 
 // mine is the actual proof-of-work miner that searches for a nonce starting from
 // seed that results in correct final block difficulty.
+// @notes 真正暴力挖矿的函数
+// id记录thread编号
+// seed是对每个线程独立随机生成的
 func (ethash *Ethash) mine(block *types.Block, id int, seed uint64, abort chan struct{}, found chan *types.Block) {
 	// Extract some data from the header
 	var (
@@ -156,20 +163,24 @@ search:
 
 		default:
 			// We don't have to update hash rate on every nonce, so update after after 2^X nonces
+			// @notes attempts用于计算hashrate
 			attempts++
 			if (attempts % (1 << 15)) == 0 {
 				ethash.hashrate.Mark(attempts)
 				attempts = 0
 			}
 			// Compute the PoW value of this nonce
+			// @notes 采用某个nonce，试图满足result<target
 			digest, result := hashimotoFull(dataset.dataset, hash, nonce)
 			if new(big.Int).SetBytes(result).Cmp(target) <= 0 {
+				// @notes 获得一个满足难度要求的nonce
 				// Correct nonce found, create a new header with it
 				header = types.CopyHeader(header)
 				header.Nonce = types.EncodeNonce(nonce)
 				header.MixDigest = common.BytesToHash(digest)
 
 				// Seal and return a block (if still needed)
+				// @notes 将挖出的区块发送给found通道
 				select {
 				case found <- block.WithSeal(header):
 					logger.Trace("Ethash nonce found and reported", "attempts", nonce-seed, "nonce", nonce)
