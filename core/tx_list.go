@@ -69,6 +69,7 @@ func (m *txSortedMap) Get(nonce uint64) *types.Transaction {
 
 // Put inserts a new transaction into the map, also updating the map's nonce
 // index. If a transaction already exists with the same nonce, it's overwritten.
+// @notes Put强行将新交易插入，可能覆盖老交易，简单草率（注意Put和Add的区别）
 func (m *txSortedMap) Put(tx *types.Transaction) {
 	nonce := tx.Nonce()
 	if m.items[nonce] == nil {
@@ -275,6 +276,8 @@ func (l *txList) Overlaps(tx *types.Transaction) bool {
 //
 // If the new transaction is accepted into the list, the lists' cost and gas
 // thresholds are also potentially updated.
+// @notes Add试图将一个新交易插入txList中，若因为无法达到pricebump的要求，abort；否则使用Put函数强行插入
+// 与其他Add函数类似，返回(bool: 是否插入成功, old: 被替代的老交易)
 func (l *txList) Add(tx *types.Transaction, priceBump uint64) (bool, *types.Transaction) {
 	// If there's an older better transaction, abort
 	old := l.txs.Get(tx.Nonce())

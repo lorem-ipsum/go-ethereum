@@ -761,6 +761,7 @@ func (w *worker) updateSnapshot() {
 	w.snapshotState = w.current.state.Copy()
 }
 
+// @notes 大函数！模拟该tx的发生，将交易记录存储到w.current中
 func (w *worker) commitTransaction(tx *types.Transaction, coinbase common.Address) ([]*types.Log, error) {
 	snap := w.current.state.Snapshot()
 
@@ -775,6 +776,7 @@ func (w *worker) commitTransaction(tx *types.Transaction, coinbase common.Addres
 	return receipt.Logs, nil
 }
 
+// @notes 对txs中的每个tx，调用commitTransaction函数来模拟它们的发生，将结果记录到w.current中
 func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coinbase common.Address, interrupt *int32) bool {
 	// Short circuit if current is nil
 	if w.current == nil {
@@ -814,6 +816,7 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 			break
 		}
 		// Retrieve the next transaction and abort if all done
+		// @notes 主要步骤，选取下一个txs中的tx
 		tx := txs.Peek()
 		if tx == nil {
 			break
@@ -834,7 +837,9 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 		// Start executing the transaction
 		w.current.state.Prepare(tx.Hash(), common.Hash{}, w.current.tcount)
 
+		// @notes 核心一步，对每个tx调用commitTransaction函数
 		logs, err := w.commitTransaction(tx, coinbase)
+		// @notes 以下是对各种err的处理
 		switch {
 		case errors.Is(err, core.ErrGasLimitReached):
 			// Pop the current out-of-gas transaction without shifting in the next from the account
@@ -894,7 +899,8 @@ func (w *worker) commitTransactions(txs *types.TransactionsByPriceAndNonce, coin
 }
 
 // commitNewWork generates several new sealing tasks based on the parent block.
-// @notes commitNetWork函数调用w.commit，最终构造了task，并通知taskLoop进行挖矿
+// @notes commitNetWork函数先取出pool.pending中的所有交易，模拟它们的发生（记录于w.current中），
+// 最后调用w.commit，最终构造了task，并通知taskLoop进行挖矿
 func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -981,6 +987,7 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 	}
 
 	// Fill the block with all available pending transactions.
+	// @notes 关键步骤！取出pool.pending中的所有交易，存在pending中（这些交易均为remote）
 	pending, err := w.eth.TxPool().Pending()
 	if err != nil {
 		log.Error("Failed to fetch pending transactions", "err", err)
@@ -989,6 +996,7 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 	// Short circuit if there is no available pending transactions.
 	// But if we disable empty precommit already, ignore it. Since
 	// empty block is necessary to keep the liveness of the network.
+	// @notes 若pending为空，视w.noempty是否为空而应对。对空pending采取宽容策略保证了链的不断生长。
 	if len(pending) == 0 && atomic.LoadUint32(&w.noempty) == 0 {
 		w.updateSnapshot()
 		return
@@ -1001,12 +1009,14 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 			localTxs[account] = txs
 		}
 	}
+	// @notes 先进行local交易
 	if len(localTxs) > 0 {
 		txs := types.NewTransactionsByPriceAndNonce(w.current.signer, localTxs)
 		if w.commitTransactions(txs, w.coinbase, interrupt) {
 			return
 		}
 	}
+	// @notes 后进行remote交易
 	if len(remoteTxs) > 0 {
 		txs := types.NewTransactionsByPriceAndNonce(w.current.signer, remoteTxs)
 		if w.commitTransactions(txs, w.coinbase, interrupt) {
